@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile Viewer</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link rel="icon" href="data:;base64,=" />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+          /* 最小限のグローバルリセット（見た目は Tailwind に委ねる）
+              ここで root のフォントサイズを 150% に設定し、全体的に約1.5倍の表示にします。
+              Tailwind の rem ベースのユーティリティにも反映されます。 */
+          html { font-size: 150%; height: 100%; }
+          body { margin: 0; height: 100%; font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+
+        .container { max-width:1000px; margin:0 auto; }
+        h1 { font-weight:500; margin:0 0 18px 0; }
+        .viewer { background: transparent; padding: 0; border-radius: 8px; margin-bottom: 20px; }
+        .card { padding: 0; }
+        .info { font-size: 0.9em; color: rgba(0,0,0,0.65); margin-top:10px; }
+
+        /* ボタンの最小リセット（視覚は Tailwind で付与してください） */
+        button { cursor: pointer; padding: 8px 12px; background: transparent; color: inherit; border: 1px solid rgba(0,0,0,0.06); border-radius: 6px; }
+        button:hover { transform: translateY(-1px); background: rgba(15,23,42,0.04); }
+
+        /* 入れ子カード（マトリョーシカ）関連 - マージンや影は必要最小限に */
+        .org-tree { padding:6px; }
+        .md-tree { list-style:none; margin:0; padding-left:0; position:relative; max-height:2000px; transition:max-height .22s ease; overflow:hidden; }
+        .md-tree::before, .md-tree li::before { display:none; }
+        .md-tree li { position:relative; margin:6px 0 0 0; padding-left:0; }
+
+        /* ノード基礎（色や余白は Tailwind で制御する想定） */
+        .md-node { display:block; padding:0; border-radius:12px; box-shadow: 0 10px 30px rgba(33,31,32,0.12); transition:transform .14s ease, box-shadow .14s ease; }
+
+        .md-children { margin:6px 0 0 8px; padding:0; border-radius:10px; box-shadow: 0 6px 18px rgba(33,31,32,0.06); transition:max-height .22s ease; overflow:hidden; }
+        .md-children.collapsed { max-height:0 !important; padding-top:0 !important; padding-bottom:0 !important; margin:0 !important; }
+        .md-children .md-node { box-shadow: 0 6px 16px rgba(33,31,32,0.04); }
+
+        .md-node .org-name { font-weight:300; font-size:1.05rem; letter-spacing:0.2px; }
+        .md-node .org-sub { margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; }
+        .node-head { display:flex; align-items:center; gap:8px; }
+        .md-tree .md-tree { margin-top:8px; padding-left:16px; }
+
+        .toggle-btn { width:30px; height:30px; border-radius:8px; border:none; display:inline-flex; align-items:center; justify-content:center; font-weight:700; margin-left:auto; cursor:pointer; }
+        .toggle-btn:focus { outline:2px solid rgba(0,0,0,0.06); }
+        .md-tree.collapsed { max-height:0 !important; padding:0 !important; margin:0 !important; }
+        .md-node:hover { transform:translateY(-3px); box-shadow: 0 10px 30px rgba(16,24,40,0.08); }
+
+        /* カードヘッダー等の補助スタイル */
+        .card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+        .card-title { font-size:1.05rem; font-weight:600; }
+        .icon-btn{ background:transparent; border:1px solid rgba(0,0,0,0.06); padding:8px 12px; border-radius:8px; font-weight:600 }
+        .node-focus { outline: 3px solid rgba(0,0,0,0.06); transform: translateY(-6px) scale(1.02); }
+
+        /* CSS 終了 */
+    </style>
+</head>
+<body>
+    <div id="app" class="min-h-screen bg-gray-50">
+                <div class="max-w-full mx-auto font-sans text-slate-900">
+            <header class="flex items-center justify-between p-4 bg-white shadow sticky top-0 z-20">
+                <div class="flex items-center gap-3">
+                    <button @click="sidebarOpen = !sidebarOpen" class="p-2 rounded-md bg-gray-100 hover:bg-gray-200 md:hidden">
+                        <svg class="w-5 h-5 text-slate-900" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    </button>
+                    <h1 class="text-lg font-medium text-sky-600">Profile Viewer</h1>
+                </div>
+                <div class="hidden md:flex items-center gap-3">
+                    <button @click="reloadAll" class="text-sm px-3 py-1 border rounded-md text-sky-600 border-sky-100">更新</button>
+                </div>
+            </header>
+
+            <div class="flex">
+                <!-- Sidebar -->
+                <aside :class="(sidebarOpen? 'translate-x-0':'-translate-x-full') + ' md:translate-x-0 fixed md:static left-0 top-0 z-30 h-full md:h-auto w-72 md:w-64 bg-white shadow-lg transition-transform duration-200'">
+                        <div class="p-4">
+                            <!-- サイドバー内の余白調整（ここを編集するとサイドバーの間隔が変わります） -->
+                        <div class="flex items-center justify-between">
+                            <strong class="text-sm">ビュー</strong>
+                            <button @click="reloadAll" class="text-sm px-2 py-1 border rounded text-sky-600 hidden md:inline">更新</button>
+                        </div>
+                        <hr class="my-3 border-t border-gray-100">
+                        <div class="space-y-2">
+                            <a href="#" @click.prevent="goToOrgView" class="block text-sm text-gray-700 hover:text-sky-600">組織図</a>
+                            <a href="#" @click.prevent="goToCompanyView" class="block text-sm text-gray-700 hover:text-sky-600">会社別</a>
+                            <a href="#" @click.prevent="goToProjectView" class="block text-sm text-gray-700 hover:text-sky-600">プロジェクト別</a>
+                        </div>
+                        <div class="mt-4 border-t pt-3">
+                            <div class="font-semibold text-sm mb-2">メンバー一覧</div>
+                            <div class="max-h-[60vh] overflow-auto">
+                                <ul class="space-y-2">
+                                    <li v-for="m in members" :key="m.id"><a href="#" @click.prevent="showMemberDetail(m.file)" class="text-sm text-gray-700 hover:text-sky-600">{{ m.name }}</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+
+                <!-- Main -->
+                <main :class="sidebarOpen? 'ml-0 md:ml-64':'ml-0'" class="flex-1 p-6">
+                    <div class="viewer bg-transparent p-0">
+                        <div class="card bg-white p-4 rounded-lg shadow">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="text-lg font-semibold text-sky-600"></div>
+                                <div>
+                                    <button v-if="selectedMemberHtml" @click="clearMemberView" class="text-sm px-2 py-1 border rounded">一覧に戻る</button>
+                                </div>
+                            </div>
+                            <div v-html="selectedMemberHtml || orgHtml" class="rounded-md"></div>
+                            <div class="text-sm text-gray-500 mt-3">最終更新: {{ lastUpdated }}</div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // プロフィールビューア（可読性向上のため再構成・共通化）
+    const { createApp, ref, onMounted } = Vue;
+
+    // プロフィールファイルを探す候補ディレクトリ（ここを編集すると検索場所が変わります）
+    const BASE_CANDIDATES = ['./Profile/'];
+
+    // ユーティリティ: テキストを取得する（キャッシュ回避クエリを付加して最新を取得）
+    async function fetchText(url) {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+        return r.text();
+    }
+
+    /* --- 共通ユーティリティ（日本語コメント） --- */
+    // HTML に埋め込む前に文字列を安全にエスケープします
+    const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // Markdown の入れ子リストを HTML の <ul>/<li> に変換します（再利用可）
+    function renderListHtml(items) {
+        if (!items || !items.length) return '';
+        let r = '<ul>';
+        for (const it of items) {
+            r += `<li>${esc(it.text)}`;
+            if (it.children && it.children.length) r += renderListHtml(it.children);
+            r += `</li>`;
+        }
+        r += '</ul>';
+        return r;
+    }
+
+            // グローバル: ノードの折りたたみ/展開を切り替える（アニメーション処理）
+            window.toggleNode = function(btn) {
+                try {
+                    const li = btn.closest('li'); if (!li) return;
+                    // まず .md-children コンテナを優先して探し（マトリョーシカ入れ子用）、なければ ul.md-tree を利用します
+                    const child = li.querySelector(':scope > .md-children') || li.querySelector(':scope > ul.md-tree');
+                    if (!child) return;
+                    const collapsed = child.classList.contains('collapsed');
+                    if (collapsed) {
+                        child.classList.remove('collapsed');
+                        const h = child.scrollHeight; child.style.maxHeight = h + 'px';
+                        btn.textContent = '−'; btn.setAttribute('aria-expanded','true');
+                        setTimeout(()=> child.style.maxHeight = '', 240);
+                    } else {
+                        child.style.maxHeight = child.scrollHeight + 'px';
+                        void child.offsetHeight;
+                        child.classList.add('collapsed');
+                        child.style.maxHeight = '0px';
+                        btn.textContent = '+'; btn.setAttribute('aria-expanded','false');
+                    }
+                } catch (e) { console.error(e); }
+            };
+
+    async function tryManifest(base) {
+        try {
+            const r = await fetch(`${base}index.json?t=${Date.now()}`);
+            if (!r.ok) return null;
+            return r.json();
+        } catch (_) { return null; }
+    }
+
+    // ディレクトリ一覧を解析する（サーバが簡易 HTML インデックスを返す場合に対応）
+    async function tryDirectoryListing(base) {
+        try {
+            const text = await fetchText(base);
+                // DOMParser を優先して使用し、失敗した場合は正規表現で抽出する（互換性確保）
+            try {
+                const dp = new DOMParser();
+                const doc = dp.parseFromString(text, 'text/html');
+                const anchors = Array.from(doc.querySelectorAll('a'));
+                return anchors.map(a => a.getAttribute('href')).filter(h => h && !h.endsWith('/') && !h.startsWith('#')).map(decodeURIComponent);
+            } catch (_) {
+                const hrefs = Array.from(text.matchAll(/href\s*=\s*"([^"\s>]+)"/gi)).map(m => m[1]);
+                return hrefs.filter(h => h && !h.endsWith('/') && !h.startsWith('#')).map(decodeURIComponent);
+            }
+        } catch (_) {
+            return null;
+        }
+    }
+
+    createApp({
+        setup() {
+            const files = ref([]);
+            const baseUsed = ref('');
+            const orgHtml = ref('');
+            const selectedMemberHtml = ref('');
+            const members = ref([]);
+            const lastResults = ref([]);
+            const lastUpdated = ref('-');
+            const sidebarOpen = ref(false);
+
+            // マニフェスト（index.json）を優先し、無ければディレクトリ一覧を試してファイル一覧を決定します
+            async function findFiles() {
+                files.value = [];
+                baseUsed.value = '';
+                for (const base of BASE_CANDIDATES) {
+                    const manifest = await tryManifest(base);
+                    if (Array.isArray(manifest) && manifest.length) {
+                        files.value = manifest;
+                        baseUsed.value = base;
+                        lastUpdated.value = new Date().toLocaleTimeString();
+                        return;
+                    }
+                    const dir = await tryDirectoryListing(base);
+                    if (Array.isArray(dir) && dir.length) {
+                        files.value = dir;
+                        baseUsed.value = base;
+                        lastUpdated.value = new Date().toLocaleTimeString();
+                        return;
+                    }
+                }
+                console.warn('Profile ディレクトリの一覧を取得できませんでした。サーバーがディレクトリ一覧を返すか、index.json を配置してください。');
+            }
+
+            // Markdown 解析（詳細）
+            // - YAML フロントマターを抽出して `meta` として保持します
+            // - 見出し（#）ごとにセクションを分割し、各セクションは文字列か入れ子リストの配列で保持します
+            // - 下の parseList() は '*' で表現された箇条書き（インデント付き）をネストした木構造に変換します
+            function parseList(text) {
+                const lines = text.split(/\r?\n/).filter(l => /\S/.test(l));
+                const nodes = [];
+                const stack = [{indent:-1, children:nodes}];
+                for (const raw of lines) {
+                    const m = raw.match(/^(\s*)\*\s+(.*)$/);
+                    if (!m) continue; // リスト行でない場合は無視します
+                    const indent = m[1].replace(/\t/g,'    ').length; // インデントの空白数を数える（タブは 4 スペース換算）
+                    const text = m[2].trim();
+                    // インデントに基づいて親ノードを決定する（インデント値を直接利用）
+                    while (stack.length && indent <= stack[stack.length-1].indent) stack.pop();
+                    const parent = stack[stack.length-1];
+                    const node = { text: text, children: [] };
+                    parent.children.push(node);
+                    stack.push({ indent: indent, children: node.children });
+                }
+                return nodes;
+            }
+
+            function parseMarkdownToData(text) {
+                const lines = text.split(/\r?\n/);
+                let i = 0;
+                const meta = {};
+                // フロントマターの解析
+                if (lines[0] === '---') {
+                    i = 1;
+                    while (i < lines.length && lines[i] !== '---') {
+                        const m = lines[i].match(/^([^:]+):\s*(.*)$/);
+                        if (m) { meta[m[1].trim()] = m[2].trim(); }
+                        i++;
+                    }
+                    if (i < lines.length && lines[i] === '---') i++;
+                }
+
+                const sections = [];
+                let current = { heading: null, level: 0, content: [] };
+                for (; i < lines.length; i++) {
+                    const l = lines[i];
+                    const h = l.match(/^(#{1,6})\s+(.*)$/);
+                    if (h) {
+                        if (current.heading !== null || current.content.length) {
+                            const raw = current.content.join('\n').trim();
+                            if (/^\s*\*\s+/m.test(raw)) {
+                                sections.push({ heading: current.heading, level: current.level, content: parseList(raw) });
+                            } else {
+                                sections.push({ heading: current.heading, level: current.level, content: raw });
+                            }
+                        }
+                        current = { heading: h[2].trim(), level: h[1].length, content: [] };
+                    } else {
+                        current.content.push(l);
+                    }
+                }
+                if (current.heading !== null || current.content.length) {
+                    const rawContent = current.content.join('\n').trim();
+                    // 箇条書きに見えるコンテンツは入れ子リストとして解析する
+                    if (/^\s*\*\s+/m.test(rawContent)) {
+                        sections.push({ heading: current.heading, level: current.level, content: parseList(rawContent) });
+                    } else {
+                        sections.push({ heading: current.heading, level: current.level, content: rawContent });
+                    }
+                }
+                return { meta, sections };
+            }
+
+            // レンダリング関連（escape は上部で定義済み）
+            // renderOrgNodes は組織ツリーを HTML に変換する責務を持ちます。
+            // - Matryoshka（入れ子カード）スタイルで children を .md-children に包む
+
+            // 組織ツリー構築・レンダリング関連（表示用に木構造を HTML に変換する）
+            function findFirstListSection(data) {
+                if (!data || !Array.isArray(data.sections)) return null;
+                return data.sections.find(s => Array.isArray(s.content) && s.content.length) || null;
+            }
+
+            function slug(s){return String(s||'').trim().replace(/\s+/g,'-').replace(/[^a-zA-Z0-9\-\u4e00-\u9fff\u3040-\u30ff]/g,'').toLowerCase();}
+
+            function renderOrgNodes(items, prefix) {
+                if (!items || !items.length) return '';
+                let out = '<ul class="md-tree">';
+                for (const it of items) {
+                    const id = (prefix||[]).concat([it.text]).map(slug).join('--') || ('node-' + Math.random().toString(36).slice(2,8));
+                    out += `<li id="node-${id}">`;
+                    // マトリョーシカ風ノードコンテナ（見出し + 折りたたみボタン）
+                    if (it.children && it.children.length) {
+                        out += `<div class="md-node bg-white p-3 rounded-lg border shadow-sm"><div class="node-head flex items-center gap-3"><div class="org-name text-sky-600">${esc(it.text)}</div><button class="toggle-btn bg-sky-50 text-sky-600" aria-expanded="true" onclick="toggleNode(this)">−</button></div>`;
+                    } else {
+                        out += `<div class="md-node bg-white p-3 rounded-lg border shadow-sm"><div class="node-head flex items-center gap-3"><div class="org-name text-sky-600">${esc(it.text)}</div><span class="inline-block w-8"></span></div>`;
+                    }
+                    // 直接値がある場合はバッジとして表示する（node.values）
+                    if (it.values && it.values.length) {
+                        out += `<div class="org-sub">${it.values.map(v => `<span class="inline-block bg-sky-100 text-sky-700 px-3 py-1 rounded-full text-sm font-semibold">${esc(v)}</span>`).join('')}</div>`;
+                    }
+                    out += '</div>';
+                    // 子ノードは .md-children で包み、カードの入れ子効果を作る
+                    if (it.children && it.children.length) {
+                        out += `<div class="md-children p-3">${renderOrgNodes(it.children, (prefix||[]).concat([it.text]))}</div>`;
+                    }
+                    out += '</li>';
+                }
+                out += '</ul>';
+                return out;
+            }
+
+            function renderOrgTree(data) {
+                const sec = findFirstListSection(data);
+                if (!sec) return '<div>組織情報が見つかりません。</div>';
+                return `<div class="org-tree">${renderOrgNodes(sec.content)}</div>`;
+            }
+
+            function showCompanyGrouping() {
+                try {
+                    const results = lastResults.value && lastResults.value.length ? lastResults.value : [];
+                    if (!results.length) return reloadAll();
+                    const groups = buildCompanyTrees(results);
+                    let out = '';
+                    const keys = Object.keys(groups).sort((a,b)=> (a=== '未設定')?1: a.localeCompare(b));
+                    for (const k of keys) {
+                        out += `<div class="card bg-white p-3 rounded-lg shadow mb-3"><div class="card-title text-sky-600">${esc(k)}</div>`;
+                        // render direct members (profiles whose company path was only the company name)
+                        const entry = groups[k] || { tree: [], members: [] };
+                        if (entry.members && entry.members.length) {
+                            out += `<div class="my-2"><div class="org-sub">${entry.members.map(m=>`<span class="inline-block bg-sky-100 text-sky-700 px-3 py-1 rounded-full text-sm font-semibold">${esc(m)}</span>`).join('')}</div></div>`;
+                        }
+                        out += renderOrgNodes(entry.tree||[], []);
+                        out += '</div>';
+                    }
+                    orgHtml.value = out || '<div>会社情報が見つかりません。</div>';
+                } catch (e) { console.error(e); }
+            }
+
+            function showProjectGrouping() {
+                try {
+                    const results = lastResults.value && lastResults.value.length ? lastResults.value : [];
+                    if (!results.length) return reloadAll();
+                    const groups = buildProjectTrees(results);
+                    let out = '';
+                    const keys = Object.keys(groups).sort((a,b)=> (a=== '未設定')?1: a.localeCompare(b));
+                    for (const k of keys) {
+                        out += `<div class="card bg-white p-3 rounded-lg shadow mb-3"><div class="card-title text-sky-600">${esc(k)}</div>`;
+                        const entry = groups[k] || { tree: [], members: [] };
+                        if (entry.members && entry.members.length) {
+                            out += `<div class="my-2"><div class="org-sub">${entry.members.map(m=>`<span class="inline-block bg-sky-100 text-sky-700 px-3 py-1 rounded-full text-sm font-semibold">${esc(m)}</span>`).join('')}</div></div>`;
+                        }
+                        out += renderOrgNodes(entry.tree||[], []);
+                        out += '</div>';
+                    }
+                    orgHtml.value = out || '<div>プロジェクト情報が見つかりません。</div>';
+                } catch (e) { console.error(e); }
+            }
+
+            // Build aggregated org-tree from all files; extract person name from meta/sections.
+            function extractPersonName(meta) {
+                if (!meta || typeof meta !== 'object') return '';
+                // normalize keys to lowercase for lookup
+                const norm = {};
+                for (const k of Object.keys(meta)) {
+                    try { norm[k.toLowerCase().replace(/[-_\s]/g,'')] = meta[k]; } catch (e) { norm[k.toLowerCase().replace(/[-_\s]/g,'')] = meta[k]; }
+                }
+                // Japanese style
+                if (norm['姓'] && norm['名']) return String(norm['姓']).trim() + String(norm['名']).trim();
+                if (norm['氏'] && norm['名']) return String(norm['氏']).trim() + String(norm['名']).trim();
+                if (norm['姓名']) return String(norm['姓名']).trim();
+                if (norm['名前']) return String(norm['名前']).trim();
+                if (norm['氏名']) return String(norm['氏名']).trim();
+                // English style
+                if (norm['family'] && norm['given']) return String(norm['family']).trim() + (String(norm['given']).trim());
+                if (norm['given'] && norm['family']) return String(norm['given']).trim() + String(norm['family']).trim();
+                if (norm['firstname'] && norm['lastname']) return String(norm['lastname']).trim() + String(norm['firstname']).trim();
+                if (norm['firstname'] && norm['surname']) return String(norm['surname']).trim() + String(norm['firstname']).trim();
+                if (norm['name']) return String(norm['name']).trim();
+                if (norm['fullname']) return String(norm['fullname']).trim();
+                if (norm['displayname']) return String(norm['displayname']).trim();
+                // try any field that looks like a human name (contains space or CJK chars)
+                for (const k of Object.keys(norm)) {
+                    const v = String(norm[k] || '').trim();
+                    if (!v) continue;
+                    if (/\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Han}/u.test(v) || /\s+/.test(v)) return v;
+                }
+                return '';
+            }
+
+            // データ全体から人の表示名を抽出する共通関数
+            // - まずメタ情報を優先して取得し、なければセクション（姓/名/姓名/name 等）から推定します
+            function getPersonFromData(data) {
+                if (!data) return '';
+                const fromMeta = extractPersonName(data.meta);
+                if (fromMeta) return fromMeta;
+                // セクションから姓/名などを組み合わせて取得する簡易ロジック
+                const secMap = {};
+                for (const s of data.sections || []) {
+                    if (!s || !s.heading) continue;
+                    secMap[String(s.heading).trim()] = s.content;
+                }
+                const last = secMap['姓'] || secMap['氏'];
+                const first = secMap['名'] || secMap['名前'];
+                if (last && first) return String(last).trim() + String(first).trim();
+                if (secMap['姓名'] || secMap['氏名']) return String(secMap['姓名'] || secMap['氏名']).trim();
+                if (secMap['name']) return String(secMap['name']).trim();
+                return '';
+            }
+
+            function collectPathsFromItem(item, prefix) {
+                prefix = prefix || [];
+                const cur = prefix.concat([item.text]);
+                if (!item.children || !item.children.length) {
+                    return [cur];
+                }
+                let out = [];
+                for (const c of item.children) out = out.concat(collectPathsFromItem(c, cur));
+                return out;
+            }
+
+            function insertPath(root, path, value) {
+                // root: array of nodes { text, children: [], values: [] }
+                if (!path || !path.length) return;
+                const head = path[0];
+                let node = root.find(n => n.text === head);
+                if (!node) {
+                    node = { text: head, children: [], values: [] };
+                    root.push(node);
+                }
+                if (path.length === 1) {
+                    if (value) node.values.push(value);
+                    return;
+                }
+                insertPath(node.children, path.slice(1), value);
+            }
+
+            function buildOrgTreeFromResults(results) {
+                const root = [];
+                const members = [];
+                // ヘッディングがプロジェクト系かどうか判定するユーティリティ
+                const isProjectHeading = (h) => {
+                    if (!h) return false;
+                    const hh = String(h).toLowerCase();
+                    return hh.includes('プロジェクト') || hh.includes('project') || hh.includes('案件') || hh.includes('projects');
+                };
+
+                for (const r of results) {
+                    if (!r || !r.data || !Array.isArray(r.data.sections)) continue;
+                    // 優先ルール:
+                    // 1) セクション見出しに '所属' 等を含むリストセクションを最優先で選ぶ
+                    // 2) それが無ければ、'プロジェクト' 系見出しを除外した最初のリストセクションを選ぶ
+                    // 3) それでも無ければ（互換性のため）最初のリストセクションを選ぶ
+                    let sec = r.data.sections.find(s => Array.isArray(s.content) && s.content.length && (s.heading && (String(s.heading).indexOf('所属') !== -1 || String(s.heading).indexOf('部署') !== -1 || String(s.heading).indexOf('部門') !== -1)));
+                    if (!sec) {
+                        // 'プロジェクト' 系の見出しは除外して、最初のリストセクションを採用する（プロジェクト混入防止）
+                        sec = r.data.sections.find(s => Array.isArray(s.content) && s.content.length && !(s.heading && isProjectHeading(s.heading))) || null;
+                    }
+                    if (!sec) sec = r.data.sections.find(s => Array.isArray(s.content) && s.content.length) || null;
+                    console.debug && console.debug('buildOrgTreeFromResults: chosen section for', r.name, sec && sec.heading);
+                    if (!sec) continue;
+
+                    // 共通化した取得ロジックを利用
+                    const person = getPersonFromData(r.data);
+                    for (const top of sec.content) {
+                        const paths = collectPathsFromItem(top, []);
+                        for (const p of paths) {
+                            insertPath(root, p, person);
+                            if (person) members.push({ name: person, path: p, file: r.name });
+                        }
+                    }
+                }
+                return { tree: root, members };
+            }
+
+            function extractCompanyName(data) {
+                if (!data) return '';
+                const meta = data.meta || {};
+                // normalize
+                const norm = {};
+                for (const k of Object.keys(meta)) norm[k.toLowerCase().replace(/[-_\s]/g,'')] = meta[k];
+                const pick = v => (v == null) ? '' : String(v).trim();
+                if (pick(norm['会社'])) return pick(norm['会社']);
+                if (pick(norm['会社名'])) return pick(norm['会社名']);
+                if (pick(norm['company'])) return pick(norm['company']);
+                if (pick(norm['organization'])) return pick(norm['organization']);
+
+                // helper: extract a readable name from parsed section content (may be nested list)
+                function extractFromSectionContent(content) {
+                    if (content == null) return '';
+                    if (typeof content === 'string') return content.trim();
+                    if (Array.isArray(content)) {
+                        const names = [];
+                        for (const item of content) {
+                            const paths = collectPathsFromItem(item, []);
+                            if (paths && paths.length) {
+                                // take the first leaf path for this top-level item
+                                names.push(paths[0].join(' / '));
+                            }
+                        }
+                        return names.join(' | ');
+                    }
+                    return String(content).trim();
+                }
+
+                // fallback: search sections for heading '会社' or '会社名'
+                if (Array.isArray(data.sections)) {
+                    for (const s of data.sections) {
+                        if (!s || !s.heading) continue;
+                        const h = String(s.heading).trim();
+                        if (h === '会社' || h === '会社名') {
+                            const val = extractFromSectionContent(s.content);
+                            if (val) return val;
+                        }
+                    }
+                }
+                return '';
+            }
+
+            function buildCompanyTrees(results) {
+                // 会社別グルーピング（日本語解説）
+                // - 各プロフィールから会社情報を抽出（メタ or セクション）し、複数行／区切り文字／入れ子リストを考慮
+                // - トップレベルの会社名でグループ化し、残りのパスはその会社配下のツリーとして構築
+                // - 会社名のみ（パス長=1）の場合は members としてその会社のメンバー一覧に追加
+                const groups = new Map();
+                for (const r of results) {
+                    if (!r || !r.data) continue;
+                    // 共通化した取得ロジックを利用
+                    const person = getPersonFromData(r.data);
+
+                    // gather company paths for this profile
+                    const companyPaths = [];
+
+                    // 1) try meta
+                    const meta = r.data.meta || {};
+                    const norm = {};
+                    for (const k of Object.keys(meta)) norm[k.toLowerCase().replace(/[-_\s]/g,'')] = meta[k];
+                    const mc = norm['会社'] || norm['会社名'] || norm['company'] || norm['organization'] || '';
+                    if (mc) {
+                        const s = String(mc).trim();
+                        // if appears to be a bullet list, parse it
+                        if (/^\s*\*/m.test(s)) {
+                            const parsed = parseList(s);
+                            for (const item of parsed) {
+                                const paths = collectPathsFromItem(item, []);
+                                for (const p of paths) companyPaths.push(p);
+                            }
+                        } else if (s.indexOf('\n') !== -1) {
+                            // multiple lines -> treat each line as a separate path or split by / or |
+                            for (const line of s.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)) {
+                                if (line.includes('/')) companyPaths.push(line.split('/').map(x=>x.trim()));
+                                else if (line.includes('|')) companyPaths.push(line.split('|').map(x=>x.trim()));
+                                else companyPaths.push([line]);
+                            }
+                        } else if (s.includes('/') || s.includes('|') || s.includes('>')) {
+                            const delim = s.includes('/') ? '/' : (s.includes('|') ? '|' : '>');
+                            companyPaths.push(s.split(delim).map(x=>x.trim()));
+                        } else {
+                            companyPaths.push([s]);
+                        }
+                    }
+
+                    // 2) try sections named '会社' or '会社名' if no meta paths
+                    if (!companyPaths.length && Array.isArray(r.data.sections)) {
+                        for (const s of r.data.sections) {
+                            if (!s || !s.heading) continue;
+                            const h = String(s.heading).trim();
+                            if (h === '会社' || h === '会社名') {
+                                if (Array.isArray(s.content)) {
+                                    for (const item of s.content) {
+                                        const paths = collectPathsFromItem(item, []);
+                                        for (const p of paths) companyPaths.push(p);
+                                    }
+                                } else if (typeof s.content === 'string') {
+                                    const raw = s.content.trim();
+                                    if (/^\s*\*/m.test(raw)) {
+                                        const parsed = parseList(raw);
+                                        for (const item of parsed) {
+                                            const paths = collectPathsFromItem(item, []);
+                                            for (const p of paths) companyPaths.push(p);
+                                        }
+                                    } else if (raw.includes('/') || raw.includes('|') || raw.includes('>')) {
+                                        const delim = raw.includes('/') ? '/' : (raw.includes('|') ? '|' : '>');
+                                        companyPaths.push(raw.split(delim).map(x=>x.trim()));
+                                    } else if (raw) {
+                                        companyPaths.push([raw]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // default: if still empty, classify as '未設定'
+                    if (!companyPaths.length) companyPaths.push(['未設定']);
+
+                    // register into groups by top-level company name
+                    for (const path of companyPaths) {
+                        const top = path && path.length ? String(path[0]).trim() || '未設定' : '未設定';
+                        if (!groups.has(top)) groups.set(top, []);
+                        groups.get(top).push({ path: path, person });
+                    }
+                }
+
+                // Build final trees per group: tree (excluding top-level company name) and members (when path length ===1)
+                const out = {};
+                for (const [company, entries] of groups.entries()) {
+                    const root = [];
+                    const members = [];
+                    for (const e of entries) {
+                        const p = e.path || [];
+                        const person = e.person;
+                        if (!p || p.length <= 1) {
+                            if (person) members.push(person);
+                            continue;
+                        }
+                        // insert remaining path parts under this company
+                        insertPath(root, p.slice(1), person);
+                    }
+                    out[company] = { tree: root, members };
+                }
+                return out;
+            }
+
+            // プロジェクト別グルーピング（会社別と同様の挙動）
+            // - 各プロフィールから `プロジェクト` 情報を抽出（meta またはセクション）
+            // - トップレベルのプロジェクト名でグループ化し、残りをそのプロジェクト配下のツリーとして構築
+            function buildProjectTrees(results) {
+                const groups = new Map();
+                for (const r of results) {
+                    if (!r || !r.data) continue;
+                    const person = getPersonFromData(r.data);
+
+                    // gather project paths for this profile
+                    const projectPaths = [];
+                    const meta = r.data.meta || {};
+                    const norm = {};
+                    for (const k of Object.keys(meta)) norm[k.toLowerCase().replace(/[-_\s]/g,'')] = meta[k];
+                    const mc = norm['プロジェクト'] || norm['project'] || norm['projects'] || '';
+                    if (mc) {
+                        const s = String(mc).trim();
+                        if (/^\s*\*/m.test(s)) {
+                            const parsed = parseList(s);
+                            for (const item of parsed) {
+                                const paths = collectPathsFromItem(item, []);
+                                for (const p of paths) projectPaths.push(p);
+                            }
+                        } else if (s.indexOf('\n') !== -1) {
+                            for (const line of s.split(/\r?\n/).map(x=>x.trim()).filter(Boolean)) {
+                                if (line.includes('/')) projectPaths.push(line.split('/').map(x=>x.trim()));
+                                else if (line.includes('|')) projectPaths.push(line.split('|').map(x=>x.trim()));
+                                else projectPaths.push([line]);
+                            }
+                        } else if (s.includes('/') || s.includes('|') || s.includes('>')) {
+                            const delim = s.includes('/') ? '/' : (s.includes('|') ? '|' : '>');
+                            projectPaths.push(s.split(delim).map(x=>x.trim()));
+                        } else {
+                            projectPaths.push([s]);
+                        }
+                    }
+
+                    // fallback: try sections named 'プロジェクト'
+                    if (!projectPaths.length && Array.isArray(r.data.sections)) {
+                        for (const s of r.data.sections) {
+                            if (!s || !s.heading) continue;
+                            const h = String(s.heading).trim();
+                            if (h === 'プロジェクト' || h === 'Project' || h === 'projects') {
+                                if (Array.isArray(s.content)) {
+                                    for (const item of s.content) {
+                                        const paths = collectPathsFromItem(item, []);
+                                        for (const p of paths) projectPaths.push(p);
+                                    }
+                                } else if (typeof s.content === 'string') {
+                                    const raw = s.content.trim();
+                                    if (/^\s*\*/m.test(raw)) {
+                                        const parsed = parseList(raw);
+                                        for (const item of parsed) {
+                                            const paths = collectPathsFromItem(item, []);
+                                            for (const p of paths) projectPaths.push(p);
+                                        }
+                                    } else if (raw.includes('/') || raw.includes('|') || raw.includes('>')) {
+                                        const delim = raw.includes('/') ? '/' : (raw.includes('|') ? '|' : '>');
+                                        projectPaths.push(raw.split(delim).map(x=>x.trim()));
+                                    } else if (raw) {
+                                        projectPaths.push([raw]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (!projectPaths.length) projectPaths.push(['未設定']);
+
+                    for (const path of projectPaths) {
+                        const top = path && path.length ? String(path[0]).trim() || '未設定' : '未設定';
+                        if (!groups.has(top)) groups.set(top, []);
+                        groups.get(top).push({ path: path, person });
+                    }
+                }
+
+                const out = {};
+                for (const [proj, entries] of groups.entries()) {
+                    const root = [];
+                    const members = [];
+                    for (const e of entries) {
+                        const p = e.path || [];
+                        const person = e.person;
+                        if (!p || p.length <= 1) {
+                            if (person) members.push(person);
+                            continue;
+                        }
+                        insertPath(root, p.slice(1), person);
+                    }
+                    out[proj] = { tree: root, members };
+                }
+                return out;
+            }
+
+            /* アイコン関連ユーティリティは削除済み（必要なら追記） */
+
+            // 単一ファイル表示は廃止済み。アプリは統合組織ツリーにフォーカスします
+
+            // 全プロフィールファイルを読み込み、解析して統合データを作成します
+            async function loadAll() {
+                try {
+                    if (!files.value.length) await findFiles();
+                    if (!files.value.length) return;
+                    const base = baseUsed.value || BASE_CANDIDATES[0];
+                    const results = [];
+                    for (const f of files.value) {
+                        try {
+                            const t = await fetchText(`${base}${encodeURIComponent(f)}?t=${Date.now()}`);
+                            const data = parseMarkdownToData(t);
+                                    // デバッグ: 特定ファイルのセクション概要を出力（解析確認用、最小限）
+                                    try {
+                                        const debugNames = ['営業リーダーA.md','営業メンバA.md','営業リーダーA','営業メンバA'];
+                                        if (debugNames.includes(f) || debugNames.includes(decodeURIComponent(f))) {
+                                            const overview = (data.sections||[]).map(s=>({heading: s && s.heading, isArray: Array.isArray(s && s.content), contentPreview: Array.isArray(s && s.content) ? s.content.map(it=>it.text).slice(0,3) : String(s && s.content).slice(0,60)}));
+                                            console.log('DEBUG parse sections for', f, overview);
+                                        }
+                                    } catch(e){console.error(e)}
+                            results.push({ name: f, data });
+                        } catch (e) {
+                            results.push({ name: f, error: e.message });
+                        }
+                    }
+                    // Merge and also collect members list
+                    const out = buildOrgTreeFromResults(results);
+                    const tree = out.tree || [];
+                    lastResults.value = results;
+                    members.value = (out.members || []).map((m,i)=> ({ name: m.name || ('member'+i), id: 'node-' + m.path.map(p=>String(p).trim().replace(/\s+/g,'-').replace(/[^a-zA-Z0-9\-\u4e00-\u9fff\u3040-\u30ff]/g,'').toLowerCase()).join('--'), file: m.file || '' }));
+                    orgHtml.value = renderOrgTree({ sections: [{ heading: 'merged', level:1, content: tree }] });
+                    lastUpdated.value = new Date().toLocaleTimeString();
+                } catch (e) {
+                    console.error(e);
+                    orgHtml.value = `<div class="text-red-700">エラー: ${esc(e.message)}</div>`;
+                }
+            }
+
+            // Render a profile's parsed data into HTML (simple renderer)
+            function renderProfileData(entry) {
+                if (!entry || !entry.data) return '<div>プロフィールが見つかりません。</div>';
+                const data = entry.data;
+                let out = `<div class="card bg-white p-4 rounded-lg shadow mb-3">`;
+                out += `<div class="flex justify-between items-center"><div class="card-title text-sky-600">${esc(entry.name || '')}</div><div>`;
+                out += `<button class="icon-btn text-sky-600 border border-sky-100" onclick="window.appClearMember()">一覧に戻る</button>`;
+                out += `</div></div>`;
+                // meta
+                if (data.meta && Object.keys(data.meta).length) {
+                    out += `<div style="margin-top:8px"><strong>Meta</strong><div style="margin-top:6px">`;
+                    for (const k of Object.keys(data.meta)) out += `<div><strong>${esc(k)}:</strong> ${esc(data.meta[k])}</div>`;
+                    out += `</div></div>`;
+                }
+                // sections
+                for (const s of data.sections || []) {
+                    out += `<div style="margin-top:10px"><h3 style="margin:6px 0 8px 0">${esc(s.heading || '')}</h3>`;
+                    if (Array.isArray(s.content)) {
+                        // 共通化した renderListHtml を使用
+                        out += renderListHtml(s.content);
+                    } else {
+                        const paragraphs = String(s.content || '').split(/\r?\n\r?\n/).map(p=>p.trim()).filter(Boolean);
+                        for (const p of paragraphs) out += `<p>${esc(p)}</p>`;
+                    }
+                    out += `</div>`;
+                }
+                out += `</div>`;
+                return out;
+            }
+
+            // On load: find files and immediately merge+render org tree
+            async function reloadAll() {
+                await findFiles();
+                await loadAll();
+            }
+
+            onMounted(reloadAll);
+
+            function scrollToTop(){ window.scrollTo({top:0,behavior:'smooth'}); }
+
+            function focusMember(id){
+                try{
+                    const el = document.getElementById(id);
+                    if(!el) return;
+                    // expand ancestors
+                    let p = el.parentElement;
+                    while(p){
+                        if(p.classList && p.classList.contains('md-tree')){
+                            p.classList.remove('collapsed');
+                            p.style.maxHeight = '';
+                        }
+                        p = p.parentElement;
+                    }
+                    // highlight node
+                    const node = el.querySelector('.md-node');
+                    if(node){
+                        node.classList.add('node-focus');
+                        setTimeout(()=> node.classList.remove('node-focus'), 2000);
+                    }
+                    el.scrollIntoView({behavior:'smooth', block:'center'});
+                }catch(e){console.error(e)}
+            }
+
+            // Show member detail by source file name
+            function showMemberDetail(fileName){
+                try{
+                    if(!fileName) return;
+                    console.log('showMemberDetail', fileName);
+                    const entry = (lastResults.value || []).find(r => r && r.name === fileName);
+                    if(!entry) {
+                        // try to reload and search
+                        reloadAll().then(()=>{
+                            const e2 = (lastResults.value || []).find(r=>r && r.name === fileName);
+                            if(e2) {
+                                const html = renderProfileData(e2);
+                                selectedMemberHtml.value = html;
+                            }
+                        });
+                        return;
+                    }
+                    const html = renderProfileData(entry);
+                    selectedMemberHtml.value = html;
+                    console.log('selectedMemberHtml set for', fileName);
+                }catch(e){console.error(e)}
+            }
+
+            function clearMemberView(){
+                // clear member view and re-render merged org tree
+                console.log('clearMemberView called');
+                selectedMemberHtml.value = '';
+                orgHtml.value = renderOrgTree({ sections: [{ heading: 'merged', level:1, content: (buildOrgTreeFromResults(lastResults.value || []).tree || []) }] });
+            }
+
+            function goToOrgView(){
+                try{
+                    console.log('goToOrgView called');
+                    clearMemberView();
+                    // ensure main org view is rendered
+                    orgHtml.value = renderOrgTree({ sections: [{ heading: 'merged', level:1, content: (buildOrgTreeFromResults(lastResults.value || []).tree || []) }] });
+                    window.scrollTo({top:0,behavior:'smooth'});
+                }catch(e){console.error(e)}
+            }
+
+            function goToCompanyView(){
+                try{
+                    // clear member detail if any, then show company grouping
+                    selectedMemberHtml.value = '';
+                    showCompanyGrouping();
+                    window.scrollTo({top:0,behavior:'smooth'});
+                }catch(e){console.error(e)}
+            }
+
+            function goToProjectView(){
+                try{
+                    selectedMemberHtml.value = '';
+                    showProjectGrouping();
+                    window.scrollTo({top:0,behavior:'smooth'});
+                }catch(e){console.error(e)}
+            }
+
+            // expose to window for rendered HTML back button
+            window.appClearMember = clearMemberView;
+
+            return {
+                files,
+                baseUsed,
+                orgHtml,
+                members,
+                selectedMemberHtml,
+                lastUpdated,
+                sidebarOpen,
+                reloadAll,
+                focusMember,
+                scrollToTop,
+                showCompanyGrouping, showProjectGrouping,
+                goToOrgView, goToCompanyView, goToProjectView,
+                showMemberDetail, clearMemberView
+            };
+        }
+    }).mount('#app');
+    </script>
+</body>
+</html>
