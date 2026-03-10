@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Profile Viewer</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Tailwind を CDN で復活 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google フォント（Roboto） -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap">
+    <!-- カスタムスタイル: Google 風の調整（フォント、カード、markdown 表示） -->
+    <style>
+      html,body{height:100%;}
+      body{font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;}
+      /* カードの滑らかな影・トランジション */
+      .card-base{transition: box-shadow .18s ease, transform .12s ease;}
+      .card-base:hover{transform: translateY(-4px);}
+      /* モーダル内のマークダウン表示 */
+      .markdown-content h1, .markdown-content h2, .markdown-content h3{font-weight:500;margin-top:0.75rem;margin-bottom:0.5rem;color:#202124}
+      .markdown-content p{color:#3c4043;line-height:1.5}
+      .markdown-content ul{padding-left:1.2rem;margin-top:0.25rem}
+      .markdown-content table{width:100%;border-collapse:collapse;margin-top:0.5rem}
+      .markdown-content th, .markdown-content td{border:1px solid #e0e0e0;padding:0.45rem;text-align:left}
+      .markdown-content th{background:#f8f9fa}
+      /* テーブルの小さめフォント */
+      .markdown-content td{font-size:0.95rem}
+    </style>
+    <!-- Markdown パーサとサニタイズ（marked + DOMPurify） -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
+</head>
+<body>
+    <div id="app" class="min-h-screen bg-gray-50 text-gray-900 p-6">
+    <!-- 全体を scale(0.8) で縮小し、幅を calc(100%/0.8) にすることでブラウザ横幅いっぱいに表示 -->
+    <div class="w-full mx-auto" style="transform: scale(0.8); transform-origin: top left; width: calc(100% / 0.8);">
+      <!-- ページヘッダー（スケール対象）: 左端にタイトル/サブ、右端に更新日。表示サイズ変更に追従 -->
+      <div class="w-full flex items-start justify-between mb-4 px-2">
+        <div>
+          <h1 class="text-3xl font-medium text-gray-800">Profile Viewer</h1>
+          <p class="mt-1 text-sm text-gray-600">チームメンバーのプロフィールを簡潔に表示します</p>
+        </div>
+        <div class="text-sm text-gray-500 self-start">最終更新: {{ lastUpdated }}</div>
+      </div>
+      <div class="w-full flex gap-6">
+      <!-- サイドバー -->
+      <aside class="w-56 hidden md:block">
+        <div class="sticky top-6">
+          <nav class="bg-white rounded-lg p-3 shadow-sm space-y-1">
+            <a href="#organization" @click.prevent="scrollToOrg" class="block px-2 py-2 rounded hover:bg-gray-100">組織表示</a>
+            <a href="#projects" @click.prevent="scrollToProjects" class="block px-2 py-2 rounded hover:bg-gray-100">プロジェクト表示</a>
+            <a href="#companies" @click.prevent="scrollToCompanies" class="block px-2 py-2 rounded hover:bg-gray-100">会社表示</a>
+          </nav>
+        </div>
+      </aside>
+      <div class="flex-1">
+      <main class="mt-4">
+        <div v-if="error" class="text-red-600 mt-2">{{ error }}</div>
+        <div v-if="members.length===0" class="mt-4 text-gray-600">メンバーが見つかりません。</div>
+
+        <div v-if="currentView === 'organization'" id="organization" class="mt-4">
+          <div>
+            <member-node v-for="node in roots" :key="node._id || node.id" :node="node" :level="0" :helpers="helpers" :current-view="currentView"></member-node>
+          </div>
+        </div>
+
+        <!-- プロジェクト表示（currentView==='projects' のときのみ表示） -->
+        <div v-if="currentView === 'projects'" id="projects" class="mt-8">
+          <h2 class="text-xl font-medium text-gray-800 mb-3">プロジェクト一覧</h2>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div v-for="p in projects" :key="p.name" class="bg-white rounded-lg p-4 shadow-sm">
+              <div class="flex items-baseline justify-between">
+                <div class="text-lg font-semibold">{{ p.name }}</div>
+                <div class="text-sm text-gray-500">メンバー {{ projectMemberCount(p) }}</div>
+              </div>
+              <div class="mt-2 text-sm text-gray-700">
+                <div class="space-y-3">
+                  <member-node v-for="root in p.roots" :key="root._id" :node="root" :level="0" :helpers="helpers" :current-view="currentView"></member-node>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 会社表示 -->
+        <div v-if="currentView === 'company'" id="companies" class="mt-8">
+          <h2 class="text-xl font-medium text-gray-800 mb-3">会社一覧</h2>
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div v-for="c in companies" :key="c.name" class="bg-white rounded-lg p-4 shadow-sm">
+              <div class="flex items-baseline justify-between">
+                <div class="text-lg font-semibold">{{ c.name }}</div>
+                <div class="text-sm text-gray-500">メンバー {{ projectMemberCount(c) }}</div>
+              </div>
+              <div class="mt-2 text-sm text-gray-700">
+                <div class="space-y-3">
+                  <member-node v-for="root in c.roots" :key="root._id" :node="root" :level="0" :helpers="helpers" :current-view="currentView"></member-node>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- モーダル: selectedHtml がセットされると表示 -->
+          <div v-if="selectedHtml" class="fixed inset-0 z-50 flex items-center justify-center">
+          <!-- 背景: クリックで閉じる -->
+          <div class="absolute inset-0 bg-black/50" @click="selectedHtml=''" aria-hidden="true"></div>
+          <div class="relative bg-white max-w-2xl w-full mx-4 rounded-lg shadow-xl p-6 z-10">
+            <button @click="selectedHtml=''" class="absolute top-2 right-2 text-gray-500 hover:text-gray-800">✕</button>
+            <div class="markdown-content text-sm bg-transparent" v-html="selectedHtml"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+    </div>
+
+  <script>
+  // -----------------------------------------
+  // シンプルな Profile ビューア
+  // - `Profile/` フォルダ内の Markdown ファイルを一覧表示
+  // - マニフェスト (index.json) を優先、それが無ければディレクトリ一覧を解析
+  // - 日本語ファイル名を考慮してパスを正規化し、`encodeURI` で安全に fetch
+  // - 一度読み込んだテキストはメンバー情報に保持して再フェッチを避ける
+  // -----------------------------------------
+
+  const { createApp, ref, onMounted } = Vue;
+  const BASE_CANDIDATES = ['./Profile/']; // 検索対象の候補ディレクトリ
+
+  // fetch のラッパー（エラー時に例外を投げる）
+  async function fetchText(url){
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.text();
+  }
+
+  // マニフェスト (index.json) を読み、配列に正規化して返す
+  async function tryManifest(base){
+    try{
+      const res = await fetch(`${base}index.json?t=${Date.now()}`);
+      if(!res.ok) return null;
+      const m = await res.json();
+      // 配列／文字列／オブジェクトのいずれでも対応して .md/.markdown のみ抽出
+      let list = [];
+      if(Array.isArray(m)) list = m;
+      else if(typeof m === 'string') list = [m];
+      else if(m && typeof m === 'object'){
+        if(Array.isArray(m.files)) list = m.files;
+        else list = Object.values(m).flatMap(v => Array.isArray(v) ? v : [v]);
+      }
+      return Array.from(new Set(list.map(String).filter(s=>/\.(md|markdown)$/i.test(s))));
+    }catch(e){ return null }
+  }
+
+  // サーバのディレクトリ一覧（HTML）を解析して Markdown ファイル名を抽出
+  async function tryDirectoryListing(base){
+    try{
+      const html = await fetchText(base);
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const hrefs = Array.from(doc.querySelectorAll('a')).map(a=>a.getAttribute('href')).filter(Boolean);
+      const files = hrefs
+        .map(h => decodeURIComponent(String(h)))
+        .map(h => h.replace(/\\/g,'/').split('/').filter(Boolean).pop())
+        .filter(Boolean)
+        .filter(f => /\.(md|markdown)$/i.test(f));
+      return Array.from(new Set(files));
+    }catch(e){ return null }
+  }
+
+  // Markdown を解析して構造化データを返す
+  // 戻り値: { meta: {...}, name: '表示名', sections: { '見出し': value } }
+  // - sections の value はプレーンテキスト、またはネストされた配列構造になります
+  function parseMarkdownToData(text){
+    const lines = text.split(/\r?\n/);
+    const meta = {};
+    let i = 0;
+    // --- で囲まれた簡易フロントマターを抽出
+    if(lines[0] === '---'){
+      i = 1;
+      while(i < lines.length && lines[i] !== '---'){
+        const m = lines[i].match(/^([^:]+):\s*(.*)$/);
+        if(m) meta[m[1].trim()] = m[2].trim();
+        i++;
+      }
+      if(i < lines.length && lines[i] === '---') i++;
+    }
+
+    // '## 見出し' をキーにして、それ以降の行をセクションごとに収集
+    const sectionsRaw = {};
+    let current = null;
+    for(; i < lines.length; i++){
+      const line = lines[i];
+      const h = line.match(/^##\s+(.*)$/);
+      if(h){
+        current = h[1].trim();
+        sectionsRaw[current] = [];
+        continue;
+      }
+      if(current){
+        sectionsRaw[current].push(line);
+      }
+    }
+
+    // セクション内の行群を解析してプレーンテキストかネストリストに変換
+    function parseSection(lines){
+      const text = lines.join('\n').trim();
+      if(!text) return '';
+
+      // まず、Markdown テーブルを検出しているか確認する
+      // テーブルはヘッダ行が |a|b| の形式で、次行が |---|---| のようになっている
+      const idxHeader = lines.findIndex((ln,i) => /^\|.*\|/.test(ln) && i+1 < lines.length && /^\|[-:\s|]+\|$/.test(lines[i+1]));
+      if(idxHeader !== -1){
+        const hdrLine = lines[idxHeader];
+        const sepLine = lines[idxHeader+1];
+        // ヘッダと区切りをパース
+        const headers = hdrLine.split('|').map(s=>s.trim()).filter(s=>s.length);
+        const rows = [];
+        for(let r = idxHeader+2; r < lines.length; r++){
+          const rowLine = lines[r];
+          if(!/^\|.*\|/.test(rowLine)) break;
+          const cols = rowLine.split('|').map(s=>s.trim()).filter((_,i,arr)=> i>0 || arr.length>1).filter((s,i)=> s!== '');
+          // 列数をヘッダに合わせてオブジェクト化
+          const obj = {};
+          for(let j=0;j<headers.length;j++){
+            obj[headers[j]] = cols[j] !== undefined ? cols[j] : '';
+          }
+          rows.push(obj);
+        }
+        return rows;
+      }
+
+      // リスト行を検出（先頭に - または *）
+      const hasList = lines.some(l => /^\s*[-*]\s+/.test(l));
+      if(!hasList) return text;
+
+      // ネストされたリストをツリー化する簡易パーサ
+      const stack = [{ indent: -1, children: [] }];
+      for(const raw of lines){
+        const m = raw.match(/^(\s*)[-*]\s+(.*)$/);
+        if(!m) continue;
+        const indent = m[1].length;
+        const txt = m[2].trim();
+        const node = { text: txt, children: [] };
+        // スタックの末尾よりインデントが小さいへ移動
+        while(indent <= stack[stack.length - 1].indent) stack.pop();
+        stack[stack.length - 1].children.push(node);
+        stack.push({ indent, children: node.children });
+      }
+
+      // 木を簡素化して配列形式へ変換
+      function simplify(nodes){
+        return nodes.map(n => n.children && n.children.length ? { text: n.text, children: simplify(n.children) } : n.text);
+      }
+      return simplify(stack[0].children);
+    }
+
+    const sections = {};
+    for(const k of Object.keys(sectionsRaw)){
+      sections[k] = parseSection(sectionsRaw[k]);
+    }
+
+    // 表示名の決定: フロントマターの名前、または "名前（姓）" + "名前（名）"、もしくは最初の非空セクション
+    let name = '';
+    if(meta['name']) name = meta['name'];
+    else if(sections['名前（姓）'] && sections['名前（名）']){
+      const se = sections['名前（姓）'];
+      const me = sections['名前（名）'];
+      const s = Array.isArray(se) ? (typeof se[0]==='string'? se[0] : se[0].text) : se;
+      const m = Array.isArray(me) ? (typeof me[0]==='string'? me[0] : me[0].text) : me;
+      name = `${s} ${m}`.trim();
+    }else{
+      for(const v of Object.values(sections)){
+        if(typeof v === 'string' && v){ name = v; break }
+        if(Array.isArray(v) && v.length){ name = (typeof v[0] === 'string' ? v[0] : v[0].text); break }
+      }
+    }
+
+    return { meta, name, sections };
+  }
+
+    // HTML エスケープ用ユーティリティ
+    function escapeHtml(s){
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+  // アプリ本体（Vue）
+  const app = createApp({
+    setup(){
+      const members = ref([]);       // { id, name, file, text, data }
+      const lastUpdated = ref('-');
+      const error = ref('');
+      const selectedHtml = ref('');
+      const roots = ref([]);
+      const projects = ref([]);
+      const companies = ref([]);
+      const currentView = ref('organization'); // 'organization' | 'projects'
+
+      function scrollToOrg(){
+        currentView.value = 'organization';
+        // ensure DOM updated then scroll
+        setTimeout(()=>{
+          const el = document.getElementById('organization');
+          if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+        }, 50);
+      }
+      function scrollToProjects(){
+        currentView.value = 'projects';
+        setTimeout(()=>{
+          const el = document.getElementById('projects');
+          if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+        }, 50);
+      }
+      function scrollToCompanies(){
+        currentView.value = 'company';
+        setTimeout(()=>{
+          const el = document.getElementById('companies');
+          if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+        }, 50);
+      }
+
+      // テンプレートで使うヘルパー: セクションの最初の値を返す
+      function getSection(entry, key){
+        if(!entry || !entry.data || !entry.data.sections) return '';
+        const v = entry.data.sections[key];
+        if(!v) return '';
+        if(Array.isArray(v)){
+          const first = v[0];
+          return typeof first === 'string' ? first : (first && first.text ? first.text : '');
+        }
+        return typeof v === 'string' ? v : '';
+      }
+
+      // セクションの最深（deepest）子要素を取得する。ネストされたリスト構造に対応。
+      function getDeepestSection(entry, key){
+        if(!entry || !entry.data || !entry.data.sections) return '';
+        const v = entry.data.sections[key];
+        if(!v) return '';
+        function deepest(node){
+          if(typeof node === 'string') return node;
+          if(Array.isArray(node) && node.length){
+            return deepest(node[node.length - 1]);
+          }
+          if(node && typeof node === 'object'){
+            if(Array.isArray(node.children) && node.children.length) return deepest(node.children);
+            if(node.text) return node.text;
+          }
+          return '';
+        }
+        const res = deepest(v);
+        return res ? String(res).trim() : '';
+      }
+
+      // 配属日からの在籍月数を計算して文字列を返す。フォーマットをいくつか受け入れる。
+      function getMonthsSinceAssigned(entry){
+        if(!entry) return '';
+        const candidates = [ '配属日', '入社日', '配属開始', '配属開始日' ];
+        let raw = '';
+        for(const k of candidates){ const v = getSection(entry, k); if(v) { raw = v; break } }
+        if(!raw) return '';
+        raw = String(raw).trim();
+        // normalize: yyyy-mm-dd, yyyy/mm/dd, yyyy年mm月dd日, yyyy-mm, yyyy年mm月
+        let y=NaN,m=NaN,d=1;
+        const ymd1 = raw.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+        const ymd2 = raw.match(/^(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日$/);
+        const ym1 = raw.match(/^(\d{4})[-\/](\d{1,2})$/);
+        const ym2 = raw.match(/^(\d{4})年\s*(\d{1,2})月$/);
+        const compact = raw.match(/^(\d{4})(\d{2})(\d{2})$/);
+        if(ymd1){ y = parseInt(ymd1[1]); m = parseInt(ymd1[2]); d = parseInt(ymd1[3]); }
+        else if(ymd2){ y = parseInt(ymd2[1]); m = parseInt(ymd2[2]); d = parseInt(ymd2[3]); }
+        else if(ym1){ y = parseInt(ym1[1]); m = parseInt(ym1[2]); d = 1; }
+        else if(ym2){ y = parseInt(ym2[1]); m = parseInt(ym2[2]); d = 1; }
+        else if(compact){ y = parseInt(compact[1]); m = parseInt(compact[2]); d = parseInt(compact[3]); }
+        else {
+          // try Date.parse fallback
+          const dt = new Date(raw);
+          if(!isNaN(dt)) { y = dt.getFullYear(); m = dt.getMonth()+1; d = dt.getDate(); }
+        }
+        if(!y || isNaN(y) || !m || isNaN(m)) return '';
+        // compute months difference between (y,m,d) and today
+        const now = new Date();
+        const start = new Date(y, m-1, d);
+        if(isNaN(start)) return '';
+        let months = (now.getFullYear() - start.getFullYear())*12 + (now.getMonth() - start.getMonth());
+        if(now.getDate() < start.getDate()) months -= 1;
+        if(months < 0) months = 0;
+        return `配属${months}ヶ月`;
+      }
+
+      // 写真セクションから画像パスを作る（値が 'yamada,jpg' のようなら comma を dot に置換）
+      function getImageSrc(entry){
+        const name = getSection(entry, '写真') || getSection(entry, '写真 ');
+        if(!name) return '';
+        let file = String(name).trim().replace(/,/g, '.').replace(/\s+/g,'');
+        // 画像は Profile/photo/ にある想定
+        const path = `${BASE_CANDIDATES[0]}photo/${encodeURI(file)}`;
+        return path;
+      }
+
+      // デフォルト画像のパス
+      function getDefaultImageSrc(){
+        return `${BASE_CANDIDATES[0]}photo/default.jpg`;
+      }
+
+      // 階層構造を作る: 組織表示では `配属上位者` を優先し、見つからなければ `会社上司` 等を参照して子をネストする
+      function getPublicId(entry){
+        // 優先: meta['公開ID'] -> meta['id'] -> sections['公開ID'] -> sections['id'] -> filenameベース
+        if(entry && entry.data && entry.data.meta){
+          if(entry.data.meta['公開ID']) return String(entry.data.meta['公開ID']).trim();
+          if(entry.data.meta['id']) return String(entry.data.meta['id']).trim();
+        }
+        const s1 = getSection(entry, '公開ID') || getSection(entry, 'id') || getSection(entry, '公開 Id');
+        if(s1) return String(s1).trim();
+        // fallback: ファイル名から拡張子を除いたもの
+        if(entry && entry.file) return String(entry.file).replace(/\.[^.]+$/, '');
+        return '';
+      }
+
+      function buildHierarchy(list){
+        const map = {};
+        // まず ID を決めて map 構築
+        list.forEach(m=>{ m.children = []; const id = getPublicId(m); m._id = id || (`file:${m.file}`); map[m._id] = m; });
+        const rootsLocal = [];
+        list.forEach(m=>{
+            // 組織表示の上司IDはまず '配属上位者' / '配属上司' を参照（公開IDが入る想定）、無ければ '会社上司' / '上司公開ID' / '上司' へフォールバック
+            let sup = getSection(m,'配属上位者') || getSection(m,'配属上司') || getSection(m,'会社上司') || getSection(m,'上司公開ID') || getSection(m,'上司') || '';
+          sup = sup ? String(sup).trim() : '';
+          const supLow = (sup && sup.toLowerCase) ? sup.toLowerCase() : sup;
+          const invalidSupVals = ['','-','なし','無し','n/a','null','undefined'];
+          const isInvalid = invalidSupVals.includes(supLow);
+          // 上司が有効な ID であり、自己参照でない場合にのみネストする
+          if(!isInvalid && sup && map[sup] && sup !== m._id){
+            map[sup].children.push(m);
+          } else {
+            rootsLocal.push(m);
+          }
+        });
+        return rootsLocal;
+      }
+
+      // Profile フォルダを検索してファイル一覧を得る
+      async function findFiles(){
+        for(const base of BASE_CANDIDATES){
+          const m = await tryManifest(base);
+          if(m && m.length) return { base, files: m };
+          const d = await tryDirectoryListing(base);
+          if(d && d.length) return { base, files: d };
+        }
+        return null;
+      }
+
+      // ファイル一覧を読み込み、メンバー配列を作る
+      async function load(){
+        error.value = '';
+        members.value = [];
+        const found = await findFiles();
+        if(!found){ error.value = 'Profile ディレクトリが見つかりません。'; return }
+        const { base, files } = found;
+        const list = [];
+        for(const f of files){
+          try{
+            const safe = String(f).replace(/\\/g,'/');
+            const url = `${base}${encodeURI(safe)}?t=${Date.now()}`;
+            const text = await fetchText(url);
+            const data = parseMarkdownToData(text);
+            const displayName = (data.meta && (data.meta['名前'] || data.meta['name'])) || data.name || f;
+            list.push({ id: `m-${list.length}`, name: displayName, file: f, text, data });
+          }catch(e){ list.push({ id: `m-${list.length}`, name: f, file: f, text: null, error: e.message }); }
+        }
+        members.value = list;
+        roots.value = buildHierarchy(list);
+        projects.value = buildProjects(list);
+        companies.value = buildCompanies(list);
+        lastUpdated.value = new Date().toLocaleTimeString();
+      }
+
+      // 各会社ごとにメンバーを集め、社内の上司関係でマトリョーシカを作る
+      function buildCompanies(list){
+        const map = {};
+        for(const m of list){
+          const cname = getSection(m,'会社') || (m.data && m.data.meta && (m.data.meta['会社'] || m.data.meta['company'])) || '未設定';
+          const name = String(cname).trim() || '未設定';
+          if(!map[name]) map[name] = [];
+          map[name].push(m);
+        }
+        const companies = [];
+        for(const [cname, members] of Object.entries(map)){
+          const nodeMap = {};
+          const rootsLocal = [];
+          for(const m of members){
+            const copy = Object.assign({}, m, { children: [] });
+            const id = getPublicId(m) || (`file:${m.file}`);
+            copy._id = id;
+            nodeMap[copy._id] = copy;
+          }
+          for(const id of Object.keys(nodeMap)){
+            const node = nodeMap[id];
+            let sup = getSection(node, '会社上司') || getSection(node, '上司公開ID') || getSection(node, '上司') || '';
+            sup = sup ? String(sup).trim() : '';
+            const supLow = (sup && sup.toLowerCase) ? sup.toLowerCase() : sup;
+            const invalidSupVals = ['','-','なし','無し','n/a','null','undefined'];
+            const isInvalid = invalidSupVals.includes(supLow);
+            if(!isInvalid && sup && nodeMap[sup] && sup !== node._id){
+              nodeMap[sup].children.push(node);
+            }else{
+              rootsLocal.push(node);
+            }
+          }
+          companies.push({ name: cname, roots: rootsLocal });
+        }
+        return companies;
+      }
+
+      // members のデータからプロジェクト毎にメンバーを集約し、プロジェクト内で階層を作る
+      function buildProjects(list){
+        const map = {};
+        // 1. 各メンバーが参加するプロジェクトごとに配列を作る
+        for(const m of list){
+          const sec = m.data && m.data.sections && m.data.sections['プロジェクト'];
+          if(!sec) continue;
+          // テーブル形式（配列のオブジェクト）
+          if(Array.isArray(sec) && sec.length && typeof sec[0] === 'object'){
+            for(const row of sec){
+              const pname = row['プロジェクト'] || row['project'] || (row[Object.keys(row)[0]]||'');
+              if(!pname) continue;
+              if(!map[pname]) map[pname] = [];
+              // ロール列は様々なヘッダ名で来る可能性があるため複数候補を確認
+              const roleVal = row['プロジェクトロール'] || row['プロジェクト ロール'] || row['プロロール'] || row['ロール'] || row['role'] || row['役割'] || '';
+              // 工数はカラム名が '工数' で来る想定（日本語）。数値っぽい文字列をそのまま保持する
+              let effort = row['工数'] || row['工数(人月)'] || row['工数(人日)'] || row['hours'] || row['工数 '] || '';
+              effort = (effort !== undefined && effort !== null) ? String(effort).trim() : '';
+              map[pname].push({ member: m, role: roleVal, effort });
+            }
+            continue;
+          }
+          // リスト形式（ネスト含む）
+          if(Array.isArray(sec)){
+            for(const it of sec){
+              if(typeof it === 'string'){
+                const pname = it;
+                if(!map[pname]) map[pname] = [];
+                map[pname].push({ member: m, role: '' });
+              }else if(typeof it === 'object' && it.text){
+                const pname = it.text;
+                if(!map[pname]) map[pname] = [];
+                map[pname].push({ member: m, role: '' });
+              }
+            }
+          }
+        }
+
+        // 2. 各プロジェクト内で公開IDをキーにノードを作り階層化する
+        const projects = [];
+        for(const [pname, entries] of Object.entries(map)){
+          const nodeMap = {};
+          const rootsLocal = [];
+          // shallow copy members and assign ids
+          for(const e of entries){
+            const m = e.member;
+            const copy = Object.assign({}, m, { children: [], roleInProject: e.role, projectEffort: e.effort || '' });
+            const id = getPublicId(m) || (`file:${m.file}`);
+            copy._id = id;
+            nodeMap[copy._id] = copy;
+          }
+          // link by supervisor id (会社上司 expected to hold 公開ID)
+          for(const id of Object.keys(nodeMap)){
+            const node = nodeMap[id];
+            let sup = getSection(node, '会社上司') || getSection(node, '上司公開ID') || getSection(node, '上司') || '';
+            sup = sup ? String(sup).trim() : '';
+            const supLow = (sup && sup.toLowerCase) ? sup.toLowerCase() : sup;
+            const invalidSupVals = ['','-','なし','無し','n/a','null','undefined'];
+            const isInvalid = invalidSupVals.includes(supLow);
+            // 有効な上司IDで、自己参照でない場合のみ子としてリンク
+            if(!isInvalid && sup && nodeMap[sup] && sup !== node._id){
+              nodeMap[sup].children.push(node);
+            }else{
+              rootsLocal.push(node);
+            }
+          }
+          projects.push({ name: pname, roots: rootsLocal });
+        }
+        return projects;
+      }
+
+      // メンバーの Markdown を表示（既に読み込み済みなら再フェッチしない）
+      function openProfile(file){
+        const entry = members.value.find(m => m.file === file);
+        if(!entry){ error.value = '指定されたメンバーが見つかりません。'; return }
+        if(entry.text){
+          // marked で Markdown を HTML に変換し、DOMPurify でサニタイズしてから表示
+          try{
+            const rawHtml = typeof marked !== 'undefined' ? marked.parse(entry.text) : `<pre>${escapeHtml(entry.text)}</pre>`;
+            const safe = typeof DOMPurify !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
+            selectedHtml.value = `<div class="mb-2"><strong>${escapeHtml(entry.name)}</strong></div><div class="markdown-content">${safe}</div>`;
+          }catch(e){
+            selectedHtml.value = `<pre>${escapeHtml(entry.text)}</pre>`;
+          }
+        }else{
+          selectedHtml.value = '読み込みに失敗しました。';
+        }
+      }
+      // helpers オブジェクトをまとめてテンプレート/コンポーネントに渡す
+      const helpers = { getImageSrc, getSection, getDeepestSection, getMonthsSinceAssigned, openProfile };
+      // 指定プロジェクトの総メンバー数をユニークで数える
+      function projectMemberCount(project){
+        if(!project || !project.roots) return 0;
+        const seen = new Set();
+        function walk(node){
+          if(!node) return;
+          if(Array.isArray(node)) return node.forEach(n=>walk(n));
+          if(node._id) seen.add(node._id);
+          if(node.children && node.children.length) node.children.forEach(c=>walk(c));
+        }
+        project.roots.forEach(r=>walk(r));
+        return seen.size;
+      }
+      onMounted(load);
+      return { members, lastUpdated, error, selectedHtml, load, openProfile, helpers, getSection, getDeepestSection, getMonthsSinceAssigned, getImageSrc, getDefaultImageSrc, roots, projects, companies, scrollToOrg, scrollToProjects, scrollToCompanies, currentView, projectMemberCount };
+    }
+  });
+
+  // 再帰コンポーネント: member-node
+  app.component('member-node', {
+    props: ['node','level','helpers','currentView'],
+    template: `
+      <div :style="{ marginLeft: level * 12 + 'px' }" class="mb-3">
+        <div class="card-base border border-transparent rounded-lg p-4 bg-white shadow-sm hover:shadow-lg cursor-pointer flex items-start relative" @click="helpers.openProfile(node.file)">
+          <div class="w-20 h-20 flex-none bg-gray-100 rounded-lg overflow-hidden flex items-center justify-center">
+            <img v-if="helpers.getImageSrc(node)" :src="helpers.getImageSrc(node)" alt="photo" class="object-cover w-full h-full" @error="(e)=>e.target.src = getDefaultImage()"/>
+            <div v-else class="text-sm text-gray-500">画像</div>
+          </div>
+          <div class="flex-1 ml-3 pr-8">
+            <div class="text-lg font-semibold text-gray-900 leading-tight">{{ helpers.getSection(node,'名前（姓）') }} {{ helpers.getSection(node,'名前（名）') }}</div>
+            <!-- 表示は currentView に依存 -->
+            <div class="mt-2">
+              <template v-if="currentView === 'projects'">
+                <div v-if="node.roleInProject" class="text-left text-sm font-medium text-gray-700">{{ node.roleInProject }}</div>
+                <div v-else class="text-left text-sm text-gray-700">&nbsp;</div>
+              </template>
+              <template v-else-if="currentView === 'company'">
+                <div v-if="helpers.getSection(node,'会社ロール') || helpers.getSection(node,'会社ロール名')" class="text-left text-sm font-medium text-gray-700">{{ helpers.getSection(node,'会社ロール') || helpers.getSection(node,'会社ロール名') }}</div>
+                <div v-else class="text-left text-sm text-gray-700">&nbsp;</div>
+              </template>
+              <template v-else>
+                <div class="text-sm text-gray-700 leading-tight">
+                  <template v-if="helpers.getDeepestSection && helpers.getDeepestSection(node,'配属')">
+                    {{ helpers.getDeepestSection(node,'配属') }} - {{ helpers.getSection(node,'配属ロール') || helpers.getSection(node,'配属ロール名') || helpers.getSection(node,'会社ロール') || '' }}
+                  </template>
+                  <template v-else>
+                    {{ helpers.getSection(node,'配属ロール') || helpers.getSection(node,'配属ロール名') || helpers.getSection(node,'会社ロール') }}
+                  </template>
+                </div>
+                <div class="text-sm text-gray-700 leading-tight">{{ helpers.getSection(node,'会社') }}</div>
+              </template>
+            </div>
+          </div>
+          <!-- 右下: currentView に応じて表示 -->
+          <div v-if="currentView === 'projects' && node.projectEffort" class="absolute bottom-3 right-3 text-xs text-gray-700 bg-white/80 px-2 py-0.5 rounded">工数: {{ node.projectEffort }}</div>
+          <div v-else-if="currentView !== 'projects' && helpers.getMonthsSinceAssigned && helpers.getMonthsSinceAssigned(node)" class="absolute bottom-3 right-3 text-xs text-gray-700 bg-white/80 px-2 py-0.5 rounded">{{ helpers.getMonthsSinceAssigned(node) }}</div>
+        </div>
+        <div v-if="node.children && node.children.length" class="mt-2 ml-4">
+          <member-node v-for="c in node.children" :key="c.id || c._id" :node="c" :level="level+1" :helpers="helpers" :current-view="currentView"></member-node>
+        </div>
+      </div>
+    `,
+    methods:{
+      getDefaultImage(){ return './Profile/photo/default.jpg' }
+    }
+  });
+
+  app.mount('#app');
+  </script>
+</body>
+</html>
