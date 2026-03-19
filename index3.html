@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Partner Profile Viewer</title>
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Material Icons + Material Components Web (MDC) -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/material-components-web@latest/dist/material-components-web.min.css">
+    <style>
+      /* Minimal overrides for Mermaid and MDC/Tailwind coexistence */
+      html,body,#app { height:100%; margin:0; }
+      .mermaid { max-width:100%; overflow:auto; }
+    </style>
+  </head>
+  <body>
+    <div id="app" class="min-h-screen bg-gray-50">
+      <header class="flex items-center justify-between px-4 py-3 bg-white shadow">
+        <div class="flex items-center gap-3">
+          <span class="material-icons text-sky-600">group</span>
+          <h1 class="text-lg font-semibold text-sky-600">Partner Profile Viewer</h1>
+        </div>
+        <div class="flex items-center gap-2">
+          <button @click="reloadAll" class="bg-sky-600 text-white px-3 py-1 rounded hover:bg-sky-700">更新</button>
+        </div>
+      </header>
+
+      <div class="flex">
+        <aside class="w-72 bg-white border-r h-[calc(100vh-64px)] overflow-auto p-4">
+          <div class="flex items-center gap-2 mb-3">
+            <label class="flex items-center gap-2"><input type="radio" v-model="mode" value="detail" class="form-radio"> <span>詳細</span></label>
+            <label class="flex items-center gap-2 ml-3"><input type="radio" v-model="mode" value="mapping" class="form-radio"> <span>マッピング</span></label>
+          </div>
+
+          <div class="mb-4">
+            <div class="text-sm font-medium text-gray-700 mb-2">パートナー一覧</div>
+            <div class="space-y-1">
+              <div v-if="files.length===0" class="text-sm text-gray-500">読み込み中...</div>
+              <a href="#" v-for="f in files" :key="f.file" @click.prevent="selectFile(f)" class="block px-3 py-2 rounded hover:bg-sky-50" :class="{'font-semibold text-sky-700': f.file===selectedFile}">{{ f.display }}</a>
+            </div>
+          </div>
+        </aside>
+
+        <main class="flex-1 p-6 h-[calc(100vh-64px)] overflow-auto">
+          <div v-if="mode==='detail'">
+            <div v-if="!selectedFile" class="text-gray-600">ファイルを選択してください。</div>
+            <div v-else>
+              <!-- Top row: ① Partner name (left) and ③ 連携領域 (right) -->
+              <div class="bg-white rounded-lg shadow p-4 mb-4">
+                <div class="md:flex md:items-start md:justify-between">
+                  <div class="md:flex-1">
+                    <h2 class="text-2xl font-semibold text-sky-600">{{ partnerName || '(パートナー名なし)' }}</h2>
+                    <div class="text-sm text-gray-500">{{ selectedFile }}</div>
+                  </div>
+                  <div class="md:w-1/3 mt-3 md:mt-0">
+                    <div class="text-sm text-gray-500">連携領域</div>
+                    <div class="mt-2">
+                      <div class="flex flex-wrap">
+                        <template v-for="m in masterList" :key="m">
+                          <span :class="['inline-block px-3 py-1 rounded-full text-sm mr-1 mb-1', selectedRenkeiSet.has(m) ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500']">{{ m }}</span>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ② リレーションレベル (full width) -->
+              <div class="mb-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                  <div class="text-sm text-gray-500">リレーションレベル</div>
+                  <div class="text-lg font-medium">{{ sections['リレーションレベル'] || '-' }}</div>
+                </div>
+              </div>
+
+              <hr class="my-4">
+
+              <!-- ④ 連携目的 -->
+              <div class="mb-4">
+                <div class="bg-white rounded-lg shadow p-4">
+                  <div class="text-sm text-gray-500">連携目的</div>
+                  <div class="mt-2" v-html="renderSectionHtml(sections['連携目的'] || '', '連携目的')"></div>
+                </div>
+              </div>
+
+              <hr class="my-4">
+
+              <!-- Bottom area: two columns. Left narrow for ⑨ 関係者との接点; right main for ⑤-⑧ -->
+              <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <!-- Left column (⑨) -->
+                <div class="md:col-span-1">
+                  <div class="bg-white rounded-lg shadow p-4">
+                      <div class="text-sm text-gray-500">関係者との接点</div>
+                      <div class="text-lg font-medium mt-2" v-html="renderSectionHtml(sections['関係者との接点'] || '', '関係者との接点')"></div>
+                    </div>
+                </div>
+
+                <!-- Right column (⑤-⑧ stacked) -->
+                <div class="md:col-span-3 space-y-4">
+                  <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">製品サービス</div>
+                    <div class="mt-2" v-html="renderSectionHtml(sections['製品サービス'] || '', '製品サービス')"></div>
+                  </div>
+
+                  <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">直近の実績</div>
+                    <div class="mt-2" v-html="renderSectionHtml(sections['直近の実績'] || '', '直近の実績')"></div>
+                  </div>
+
+                  <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">パートナー評価</div>
+                    <div class="mt-2" v-html="renderSectionHtml(sections['パートナー評価'] || '', 'パートナー評価')"></div>
+                  </div>
+
+                  <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">今後の関係性</div>
+                    <div class="mt-2">
+                      <div class="flex flex-wrap">
+                        <template v-for="r in relationMaster" :key="r">
+                          <span :class="['inline-block px-3 py-1 rounded-full text-sm mr-1 mb-1', selectedRelationSet.has(r) ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-500']">{{ r }}</span>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="mode==='mapping'">
+            <div class="bg-white rounded-lg shadow p-4">
+              <h3 class="text-lg font-medium text-sky-600">ドメイン別マッピング</h3>
+              <div v-if="mappingKeys.length===0" class="text-sm text-gray-500">読み込み中...</div>
+              <div v-for="k in mappingKeys" :key="k" class="mt-4">
+                <div class="p-3 border rounded">
+                  <strong class="text-sky-700">{{ k }}</strong>
+                  <div class="mt-2">
+                    <div v-if="mapping[k] && mapping[k].length">
+                      <div v-for="item in mapping[k]" :key="item.name" class="text-sm">- <a href="#" @click.prevent="selectFile(item.file)" class="text-sky-600 hover:underline">{{ item.name }} ({{ item.rlevel }})</a></div>
+                    </div>
+                    <div v-else class="text-sm text-gray-500">(なし)</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
+    <!-- mermaid.js (stable CDN) -->
+    <script src="https://unpkg.com/mermaid@10/dist/mermaid.min.js"></script>
+    <!-- Grid.js for nicer table rendering -->
+    <link href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css" rel="stylesheet" />
+    <script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
+
+    <script>
+      const { createApp } = Vue;
+      const md = window.markdownit({ html: true });
+      mermaid.initialize({ startOnLoad: false });
+
+      // ここを変更すると「連携領域」の候補チップが変わる（詳細画面右上・マッピング画面）
+      const DEFAULT_MASTER_LIST = [
+        '戦略・企画', '営業', 'プロジェクトマネジメント', 'コンサルティング', 'エンジニア',
+        'ソリューションサービス', '運用', 'セキュリティ教育', '脆弱性診断', 'フォレンジック対応', 'バックオフィス業務'
+      ];
+      // ここを変更すると「今後の関係性」の候補チップが変わる
+      const DEFAULT_RELATION_MASTER = ['強化', '維持', '縮小', '終了'];
+
+      const TABLE_SEPARATOR_RE = /^\s*\|?\s*(?:[:\-]+\s*(?:\|\s*[:\-]+\s*)+)\|?\s*$/;
+      const TABLE_SEPARATOR_ALT_RE = /^\s*(?:[:\-]+\s*\|\s*)+[:\-]+\s*$/;
+
+      function encodeBase64Utf8(str) {
+        try {
+          return btoa(unescape(encodeURIComponent(str)));
+        } catch (e) {
+          try { return btoa(str); } catch (_e2) { return ''; }
+        }
+      }
+
+      function decodeBase64Utf8(str) {
+        try {
+          return decodeURIComponent(escape(atob(str)));
+        } catch (e) {
+          return atob(str);
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function splitTableRow(rowText) {
+        let line = rowText.trim();
+        if (line.startsWith('|')) line = line.slice(1);
+        if (line.endsWith('|')) line = line.slice(0, -1);
+        return line.split('|').map(cell => cell.trim());
+      }
+
+      function findMarkdownTableHeader(lines) {
+        for (let i = 0; i < lines.length - 1; i++) {
+          const header = lines[i];
+          const separator = lines[i + 1];
+          if (!/\|/.test(header)) continue;
+          if (/^\s*```/.test(header) || /^\s*```/.test(separator)) continue;
+          if (TABLE_SEPARATOR_RE.test(separator) || TABLE_SEPARATOR_ALT_RE.test(separator)) {
+            return { headerIdx: i, separatorIdx: i + 1 };
+          }
+        }
+        return null;
+      }
+
+      function isMarkdownTable(text) {
+        if (!text) return false;
+        return Boolean(findMarkdownTableHeader(text.split(/\r?\n/)));
+      }
+
+      function parseMarkdownTable(text) {
+        const lines = text.split(/\r?\n/);
+        const found = findMarkdownTableHeader(lines);
+        if (!found) return null;
+
+        const headers = splitTableRow(lines[found.headerIdx]);
+        const rows = [];
+        for (let i = found.separatorIdx + 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.trim() || !/\|/.test(line)) break;
+          rows.push(splitTableRow(line));
+        }
+        return { headers, rows };
+      }
+
+      function splitLineList(text) {
+        return String(text || '')
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .filter(Boolean);
+      }
+
+      function stripMarkdownComments(text) {
+        // md内のHTMLコメント(<!-- ... -->)を除去して、表示や分類に影響させない
+        return String(text || '').replace(/<!--[\s\S]*?-->/g, '');
+      }
+
+      function downloadBlob(content, mimeType, filename) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function downloadCsv(headers, rows, filename) {
+        const escapeCell = (v) => String(v).replace(/"/g, '""');
+        const lines = [headers.map(h => `"${escapeCell(h)}"`).join(',')];
+        for (const row of rows) {
+          lines.push(row.map(cell => `"${escapeCell(cell)}"`).join(','));
+        }
+        downloadBlob(lines.join('\r\n'), 'text/csv;charset=utf-8;', filename);
+      }
+
+      async function fetchTextIfOk(url) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) return null;
+          return await response.text();
+        } catch (_e) {
+          return null;
+        }
+      }
+
+      async function fetchJsonIfOk(url) {
+        try {
+          const response = await fetch(url);
+          if (!response.ok) return null;
+          return await response.json();
+        } catch (_e) {
+          return null;
+        }
+      }
+
+      function normalizePartnerFileName(rawName) {
+        if (!rawName) return null;
+        const cleaned = String(rawName).trim();
+        if (!cleaned) return null;
+
+        // 取得元によっては相対/絶対URLやクエリ付き href が来るため、最終セグメントだけを使う
+        let nameOnly = cleaned.split('#')[0].split('?')[0];
+        nameOnly = nameOnly.replace(/\\/g, '/');
+        nameOnly = nameOnly.split('/').filter(Boolean).pop() || '';
+
+        try {
+          nameOnly = decodeURIComponent(nameOnly);
+        } catch (_e) {
+          // 不正なエンコードが混在しても一覧化は継続する
+        }
+
+        if (!nameOnly.toLowerCase().endsWith('.md')) return null;
+        return nameOnly;
+      }
+
+      function renderGrids() {
+        try {
+          const placeholders = Array.from(document.querySelectorAll('[data-grid-table]'));
+          placeholders.forEach((placeholder) => {
+            if (placeholder.dataset.rendered === '1') return;
+            const source = placeholder.dataset.gridTable ? decodeBase64Utf8(placeholder.dataset.gridTable) : '';
+            const parsed = parseMarkdownTable(source);
+            if (!parsed) return;
+
+            const grid = new gridjs.Grid({
+              columns: parsed.headers.map(header => ({ name: header })),
+              data: parsed.rows,
+              sort: true,
+              pagination: { enabled: true, limit: 5 }
+            });
+            grid.render(placeholder);
+            placeholder.dataset.rendered = '1';
+          });
+        } catch (e) {
+          console.error('renderGrids', e);
+        }
+      }
+
+      createApp({
+        data() {
+          return {
+            files: [],
+            selectedFile: null,
+            partnerName: '',
+            sections: {},
+            masterList: [],
+            relationMaster: [],
+            mapping: {},
+            mode: 'detail'
+          };
+        },
+        computed: {
+          mappingKeys() {
+            return Object.keys(this.mapping);
+          },
+          selectedRenkeiSet() {
+            return new Set(this.extractItems(this.sections['連携領域'] || ''));
+          },
+          selectedRelationSet() {
+            return new Set(this.extractItems(this.sections['今後の関係性'] || ''));
+          }
+        },
+        methods: {
+          // ここを修正すると「起動時/更新時に読み込む対象」が変わる
+          async loadFiles() {
+            try {
+              const names = await this.fetchPartnerFileNames();
+              if (!names || !names.length) {
+                this.files = [];
+                return;
+              }
+
+              const fileEntries = names.map(name => ({ file: name, display: name }));
+              await Promise.all(fileEntries.map(async (entry) => {
+                const parsed = await this.readPartnerProfile(entry.file);
+                if (parsed && parsed.partnerName) {
+                  entry.display = parsed.partnerName;
+                }
+              }));
+              this.files = fileEntries;
+            } catch (e) {
+              console.error(e);
+              this.files = [];
+            }
+          },
+          async fetchPartnerFileNames() {
+            const indexNames = await fetchJsonIfOk('PartnerProfile/index.json');
+            if (typeof indexNames === 'string') {
+              const onlyName = normalizePartnerFileName(indexNames);
+              return onlyName ? [onlyName] : [];
+            }
+            if (Array.isArray(indexNames)) {
+              const normalizedFromIndex = indexNames
+                .map(name => normalizePartnerFileName(name))
+                .filter(Boolean);
+              return Array.from(new Set(normalizedFromIndex)).sort((a, b) => a.localeCompare(b, 'ja'));
+            }
+
+            const dirHtml = await fetchTextIfOk('PartnerProfile/');
+            if (!dirHtml) return [];
+
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(dirHtml, 'text/html');
+            const namesFromLinks = Array.from(doc.querySelectorAll('a'))
+              .map(a => normalizePartnerFileName(a.getAttribute('href') || ''))
+              .filter(Boolean);
+
+            return Array.from(new Set(namesFromLinks)).sort((a, b) => a.localeCompare(b, 'ja'));
+          },
+
+          // ここを修正すると「domain-master.txt/relation-master.txt が無い時の表示候補」が変わる
+          async loadMasterLists() {
+            const domainText = await fetchTextIfOk('domain-master.txt');
+            const domainItems = splitLineList(domainText);
+            this.masterList = domainItems.length ? domainItems : [...DEFAULT_MASTER_LIST];
+
+            const relationText = await fetchTextIfOk('relation-master.txt');
+            const relationItems = splitLineList(relationText);
+            this.relationMaster = relationItems.length ? relationItems : [...DEFAULT_RELATION_MASTER];
+          },
+
+          // 箇条書き/カンマ区切りを配列化。ここを変えると判定ロジック全体に影響する
+          extractItems(text) {
+            if (!text) return [];
+            const lines = splitLineList(text);
+            const items = [];
+
+            for (const line of lines) {
+              if (line.startsWith('*') || line.startsWith('-')) {
+                items.push(line.replace(/^[-*]\s*/, '').trim());
+                continue;
+              }
+              if (line.includes(',') || line.includes('、')) {
+                items.push(...line.split(/[,、]/).map(v => v.trim()).filter(Boolean));
+                continue;
+              }
+              items.push(line);
+            }
+            return items;
+          },
+
+          async selectFile(fileOrObj) {
+            const fileName = typeof fileOrObj === 'object' && fileOrObj.file ? fileOrObj.file : fileOrObj;
+            this.selectedFile = fileName;
+            this.mode = 'detail';
+            await this.loadFileContent(fileName);
+          },
+
+          async readPartnerProfile(fileName) {
+            const text = await fetchTextIfOk(`PartnerProfile/${encodeURIComponent(fileName)}`);
+            if (!text) return null;
+            return this.parseContent(text);
+          },
+
+          // ここを修正すると「選択時に表示する項目」が変わる
+          async loadFileContent(fileName) {
+            const parsed = await this.readPartnerProfile(fileName);
+            if (!parsed) {
+              this.partnerName = '';
+              this.sections = {};
+              return;
+            }
+
+            this.partnerName = parsed.partnerName;
+            this.sections = parsed.sections;
+            this.$nextTick(() => {
+              this.renderMermaid();
+              setTimeout(() => renderGrids(), 150);
+            });
+          },
+
+          parseContent(text) {
+            const sanitizedText = stripMarkdownComments(text);
+            const partnerName = (() => {
+              const match = sanitizedText.match(/^#\s*パートナー名\s*$/m);
+              if (!match) return null;
+
+              const rest = sanitizedText.slice(match.index + match[0].length);
+              const lines = rest.split(/\r?\n/);
+              for (const line of lines) {
+                if (line.trim()) return line.trim();
+              }
+              return null;
+            })();
+
+            const sections = {};
+            const headerRe = /^##\s*(.+)\s*$/gm;
+            const matches = [];
+            let m;
+            while ((m = headerRe.exec(sanitizedText)) !== null) {
+              matches.push({ title: m[1].trim(), index: m.index, length: m[0].length });
+            }
+
+            for (let i = 0; i < matches.length; i++) {
+              const start = matches[i].index + matches[i].length;
+              const end = i + 1 < matches.length ? matches[i + 1].index : sanitizedText.length;
+              sections[matches[i].title] = sanitizedText.slice(start, end).replace(/^[\r\n]+/, '').trim();
+            }
+
+            return { partnerName, sections };
+          },
+
+          // ここを修正すると「各セクションの描画方式（Markdown/Table/Mermaid）」が変わる
+          renderSectionHtml(value, key) {
+            if (!value) return '<div>-</div>';
+
+            if (isMarkdownTable(value)) {
+              const id = `grid_${Math.random().toString(36).slice(2, 9)}`;
+              const encoded = encodeBase64Utf8(value);
+              const baseName = key ? key.replace(/\s+/g, '_') : id;
+              return [
+                '<div class="flex justify-end gap-2 mb-2">',
+                `<button data-export-for="${id}" data-export-format="csv" data-export-name="${escapeHtml(`${baseName}.csv`)}" class="px-2 py-1 bg-sky-600 text-white text-sm rounded">CSV出力</button>`,
+                `<button data-export-for="${id}" data-export-format="json" data-export-name="${escapeHtml(`${baseName}.json`)}" class="px-2 py-1 bg-gray-200 text-gray-800 text-sm rounded">JSON出力</button>`,
+                '</div>',
+                `<div id="${id}" data-grid-table="${encoded}" class="overflow-auto"></div>`
+              ].join('');
+            }
+
+            let html = md.render(value);
+            html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_all, src) => {
+              return `<div class="mermaid">${src}</div>`;
+            });
+            return html;
+          },
+
+          renderMermaid() {
+            try {
+              const containers = document.querySelectorAll('.mermaid');
+              containers.forEach((el) => {
+                try { mermaid.init(undefined, el); } catch (e) { console.error(e); }
+              });
+            } catch (e) {
+              console.error(e);
+            }
+          },
+
+          // ここを修正すると「マッピング画面の分類ルール」が変わる
+          async buildMapping() {
+            const map = Object.fromEntries(this.masterList.map(m => [m, []]));
+
+            for (const fileInfo of this.files) {
+              const fileName = fileInfo.file;
+              const parsed = await this.readPartnerProfile(fileName);
+              if (!parsed) continue;
+
+              const name = parsed.partnerName || fileName;
+              const rlevel = parsed.sections['リレーションレベル'] || '-';
+              const renkeiItems = this.extractItems(parsed.sections['連携領域'] || '');
+
+              let matched = false;
+              for (const item of renkeiItems) {
+                if (!this.masterList.includes(item)) continue;
+                map[item].push({ name, file: fileName, rlevel });
+                matched = true;
+              }
+
+              if (!matched) {
+                if (!map['未設定']) map['未設定'] = [];
+                map['未設定'].push({ name, file: fileName, rlevel });
+              }
+            }
+
+            this.mapping = map;
+          },
+
+          // ここを修正すると「更新ボタン押下時の再読込順序」が変わる
+          async reloadAll() {
+            await this.loadFiles();
+            await this.loadMasterLists();
+            if (this.mode === 'mapping') {
+              await this.buildMapping();
+            }
+            if (this.selectedFile) {
+              await this.loadFileContent(this.selectedFile);
+            }
+          }
+        },
+        async mounted() {
+          await this.loadFiles();
+          await this.loadMasterLists();
+
+          const qp = new URLSearchParams(location.search);
+          if (qp.get('mode') === '詳細' && qp.get('file')) {
+            const fileName = decodeURIComponent(qp.get('file'));
+            // ここを修正すると URL パラメータ連携時の自動選択条件が変わる
+            if (this.files.some(f => f.file === fileName)) {
+              await this.selectFile(fileName);
+            }
+          }
+        },
+        watch: {
+          async mode(newValue) {
+            if (newValue === 'mapping') {
+              await this.buildMapping();
+            }
+          }
+        }
+      }).mount('#app');
+
+      // ここを修正すると「表のCSV/JSON出力」の挙動が変わる
+      document.addEventListener('click', function (e) {
+        const btn = e.target.closest('[data-export-for]');
+        if (!btn) return;
+
+        const placeholderId = btn.dataset.exportFor;
+        const placeholder = document.getElementById(placeholderId);
+        if (!placeholder) return;
+
+        const format = (btn.dataset.exportFormat || 'csv').toLowerCase();
+        const filename = btn.dataset.exportName || `${placeholderId}.${format === 'json' ? 'json' : 'csv'}`;
+
+        try {
+          const source = placeholder.dataset.gridTable ? decodeBase64Utf8(placeholder.dataset.gridTable) : '';
+          const parsed = source ? parseMarkdownTable(source) : null;
+          if (!parsed) return;
+
+          if (format === 'json') {
+            downloadBlob(JSON.stringify(parsed, null, 2), 'application/json;charset=utf-8;', filename);
+          } else {
+            downloadCsv(parsed.headers, parsed.rows, filename);
+          }
+        } catch (err) {
+          console.error('export error', err);
+        }
+
+        e.preventDefault();
+      });
+    </script>
+    <!-- Material Components Web JS -->
+    <script src="https://unpkg.com/material-components-web@latest/dist/material-components-web.min.js"></script>
+    <script>
+      try { if (window.mdc && mdc.autoInit) mdc.autoInit(); } catch(e) { console.error(e); }
+    </script>
+  </body>
+</html>
